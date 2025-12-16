@@ -7,102 +7,76 @@ import math
 
 # custom attention layer
 class MaskedMHA(nn.Module):
-    # we will be following the same example as the GPT 2 paper
-    #    
-    # GPT-2 Paper: (follows GPT-1 in terms of self-attention. GPT-1 follows original transformer work)
-    #   768 dimensional states, 12 heads
-    # Attention is All You Need:
-    #   d_k = d_v = d_model/h = 64
     def __init__(self, d_model: int, n_heads: int, dropout: float, d_k: int = None, d_v: int = None):
         super().__init__()
-
-        # assert
         assert d_model % n_heads == 0
 
-        # attention parameters
         self.d_model = d_model
         self.n_heads = n_heads
-        if d_k is None:
-            self.d_k = self.d_model // self.n_heads
-        else:
-            self.d_k = d_k
+        
+        # 1. FIX: Correctly set d_k and d_v
+        self.d_k = d_k if d_k is not None else d_model // n_heads
+        self.d_v = d_v if d_v is not None else d_model // n_heads
 
-        if d_v is None:
-            self.d_v = self.d_model // self.n_heads
-        else:
-            self.d_k = d_k
-
+        # Projections
+        self.w_q = nn.Linear(d_model, n_heads * self.d_k)
+        self.w_k = nn.Linear(d_model, n_heads * self.d_k)
+        self.w_v = nn.Linear(d_model, n_heads * self.d_v)
         
-        # projections
-        # in projections
-        self.w_q = nn.Linear(d_model, n_heads*d_k)
-        # print("w_q: ")
-        # self.print_params(self.w_q)
-        self.w_k = nn.Linear(d_model, n_heads*d_k)
-        # print("w_k: ")
-        # self.print_params(self.w_k)
-        self.w_v = nn.Linear(d_model, n_heads*d_v)
-        # print("w_v: ")
-        # self.print_params(self.w_v)
+        self.w_o = nn.Linear(n_heads * self.d_v, d_model)
         
-        # out projection
-        self.w_o = nn.Linear(n_heads*d_v, d_model)
-        
-        # dropout layers (following Karpathy's model)
         self.attn_dropout = nn.Dropout(dropout)
         self.residual_dropout = nn.Dropout(dropout)
 
-    def print_params(self, lay):
-        print(list(lay.parameters()))
-
-    def resize_input(self, x):
-        xi_resize = x.view(x.shape[0], x.shape[1], self.n_heads, self.d_k)
+    def resize_input(self, x, d_size):
+        # (B, S, H * D) -> (B, S, H, D)
+        xi_resize = x.view(x.shape[0], x.shape[1], self.n_heads, d_size)
+        # (B, S, H, D) -> (B, H, S, D)
         xi_resize = xi_resize.permute(0, 2, 1, 3)
         return xi_resize
     
     def resize_output(self, x):
+        # (B, H, S, D) -> (B, S, H, D)
         xo_resize = x.permute(0, 2, 1, 3)
-        xo_resize.view((xo_resize.shape[0], xo_resize.shape[1], -1))
+        # (B, S, H, D) -> (B, S, H*D)
+        xo_resize = xo_resize.contiguous().view(xo_resize.shape[0], xo_resize.shape[1], -1)
         return xo_resize
 
-    def forward(self, q, k, v, mask=None):
-        B = q.shape[0]
+    def forward(self, x, mask=None):
+        q = x
+        k = x
+        v = x
         S = q.shape[1]
-        E = q.shape[2]
 
+        # Ideally, move mask to the same device as q
         if mask is None:
-            mask = torch.triu(torch.ones(S, S), diagonal=1).to(bool)
+            mask = torch.triu(torch.ones(S, S, device=q.device), diagonal=1).bool()
 
-        # perform in projection
         qi = self.w_q(q)
         ki = self.w_k(k)
         vi = self.w_v(v)
 
-        # resize to (B, n_heads, S, d_k)
-        # will go something like:
-        # (B, S, d_model) -> (B, S, n, d_k)
-        # (B, S, n, d_k) -> (B, n, S, d_k)        
-        qi_r = self.resize_input(qi)
-        ki_r = self.resize_input(ki)
-        vi_r = self.resize_input(vi)
+        # Resize with explicit dimensions
+        qi_r = self.resize_input(qi, self.d_k)
+        ki_r = self.resize_input(ki, self.d_k)
+        vi_r = self.resize_input(vi, self.d_v) # Uses d_v now
 
-        # multiply q, k
+        # Scaled Dot Product
         scaled = (qi_r @ ki_r.transpose(-2, -1)) / math.sqrt(self.d_k)
 
-        # apply mask and softmax
-        scaled[:, :, mask] = float("-inf")
+        # Apply mask
+        # Standard PyTorch way: masked_fill(mask_condition, value)
+        scaled = scaled.masked_fill(mask == 1, float("-inf"))
+        
         attn = torch.softmax(scaled, dim=3)
         attn = self.attn_dropout(attn)
 
-        # multiply v
         outputs = attn @ vi_r
-
-        # concatenate heads
+        
         outputs_r = self.resize_output(outputs)
 
-        # perform outprojection
         return self.residual_dropout(self.w_o(outputs_r))
-
+    
     # def forward(self, q, k, v, mask=None):
     #     # shape
     #     B = q.shape[0]
@@ -130,7 +104,7 @@ class GELU(nn.Module):
         super().__init__()
     
     def forward(self, x):
-        return 0.5 * x * (1 + torch.tanh(torch.sqrt(1/torch.pi)) * (x + 0.044715*torch.pow(x, 3)))
+        return 0.5 * x * (1.0 + torch.tanh(math.sqrt(2.0 / math.pi) * (x + 0.044715 * torch.pow(x, 3.0))))
 
 class FeedForward(nn.Module):
     # feedforward layer as implemented in GPT-2
@@ -158,6 +132,7 @@ class FeedForward(nn.Module):
         x = self.gelu(self.w_in(x))
         x = self.w_out(x)
         return x
+
 
 class Norm(nn.Module):
     # norm function as implemented in GPT-2
@@ -207,13 +182,13 @@ class DecoderLayer(nn.Module):
         super().__init__()
 
         # norm1
-        self.norm1 = nn.LayerNorm()
+        self.norm1 = nn.LayerNorm(d_model)
 
         # MHA
         self.mha = MaskedMHA(d_model, n_heads, dropout)
 
         # norm2
-        self.norm2 = nn.LayerNorm()
+        self.norm2 = nn.LayerNorm(d_model)
 
         # feedforwad
         self.ff = FeedForward(d_model, d_inner)
@@ -222,11 +197,9 @@ class DecoderLayer(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
-        x = self.norm1(x)
-        x = self.mha(x) + x
-        x = self.norm2(x)
-        x = self.ff(x) + x
-        return self.dropout(x)
+        x = self.mha(self.norm1(x)) + x
+        x = self.dropout(self.ff(self.norm2(x))) + x
+        return x
 
 # main model class
 class GPT(nn.Module):
@@ -244,7 +217,8 @@ class GPT(nn.Module):
 
         # embedding layer
         self.embed = nn.Embedding(vocab_size, d_model)  # (B, S, d_model)
-        
+        self.seq_len = seq_len
+
         # positional encoding
         self.positional = nn.Embedding(seq_len, d_model)
 
@@ -255,9 +229,10 @@ class GPT(nn.Module):
 
         # final layers
         # out proj
-        self.out_proj = nn.Linear(d_model, vocab_size, bias=False) 
+        self.out_proj = nn.Linear(d_model, vocab_size, bias=False)
+        self.ln_f = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
-
+        
     def forward(self, x, targets=None):
         device = x.device
         B = x.shape[0]
@@ -272,8 +247,8 @@ class GPT(nn.Module):
         # go through transformer layers
         for layer in self.layers:
             x1 = layer(x1)
-
-        # final layers
+        x1 = self.ln_f(x1)
+        # final layers - (B, S, D)
         logits = self.out_proj(x1) # (B, S, vocab_size)
 
         # how is this supposed to work?
@@ -300,31 +275,38 @@ class GPT(nn.Module):
         # it looks like this is how it works in the documentation. 
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=True)
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), ignore_index=-1)
         
         return logits, loss
-    
+
     @torch.no_grad()
-    def generate(self, idx, max_new_tokens, temperature=1.0, do_sample=False, top_k=None):
+    def generate(self, prompt, tokenizer, max_new_tokens=100, temperature=0.6, top_k=10):
+        # Source: minGPT (Karpathy)
+        idx = torch.tensor(tokenizer.tokenize(prompt), dtype=torch.long).unsqueeze(0).to('cuda')
         for _ in range(max_new_tokens):
-            # if the sequence context is growing too long we must crop it at block_size
-            idx_cond = idx if idx.size(1) <= self.block_size else idx[:, -self.block_size:]
-            # forward the model to get the logits for the index in the sequence
+            # 2. Crop context if it gets too long (block_size)
+            idx_cond = idx[:, -self.seq_len:]
+            
+            # 3. Get predictions
             logits, _ = self(idx_cond)
-            # pluck the logits at the final step and scale by desired temperature
-            logits = logits[:, -1, :] / temperature
-            # optionally crop the logits to only the top k options
+            
+            # Focus only on the last time step
+            logits = logits[:, -1, :] / temperature  # Apply Temperature
+            
+            # 4. Optional: Top-K Sampling (The Fix!)
             if top_k is not None:
-                v, _ = torch.topk(logits, top_k)
+                v, _ = torch.topk(logits, min(top_k, logits.size(-1)))
+                # Mask out everything that isn't in the top_k
                 logits[logits < v[:, [-1]]] = -float('Inf')
-            # apply softmax to convert logits to (normalized) probabilities
+
+            # 5. Apply Softmax to get probabilities
             probs = F.softmax(logits, dim=-1)
-            # either sample from the distribution or take the most likely element
-            if do_sample:
-                idx_next = torch.multinomial(probs, num_samples=1)
-            else:
-                _, idx_next = torch.topk(probs, k=1, dim=-1)
-            # append sampled index to the running sequence and continue
+            
+            # 6. Sample from the distribution
+            idx_next = torch.multinomial(probs, num_samples=1)
+            
+            # 7. Append to the sequence
             idx = torch.cat((idx, idx_next), dim=1)
 
-        return idx
+        # Decode
+        return tokenizer.detokenize(idx[0].tolist())

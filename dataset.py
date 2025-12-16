@@ -4,6 +4,33 @@ import torch.nn as nn
 from torch.utils.data import Dataset
 import pickle
 
+class UniqueCharTokenizer:
+    # this is the tokenizer which just uses unique characters from the corpus
+    def __init__(self):
+        file_path = 'shakespeare.txt'  # Replace with the actual path to your text file
+        try:
+            with open(file_path, 'r') as file:
+                text_corpus = file.read()
+            print("File content loaded successfully:")
+        except FileNotFoundError:
+            print(f"Error: The file '{file_path}' was not found.")
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            # get the unique characters 
+        
+        unique = list(set(text_corpus))
+
+        # fill the tokenizer
+        self.tokenizer = {unique[i] : i+1  for i in range(len(unique))}
+        print(self.tokenizer)
+        self.detokenizer = {i+1 : unique[i] for i in range(len(unique))}
+
+    def tokenize(self, str):
+        # tokenizes the input string
+        return [self.tokenizer[c] for c in str]
+
+    def detokenize(self, tokens):
+        return "".join([self.detokenizer[tok] for tok in tokens])
 
 # this is the file where I keep all of my tokenizers
 class BPETokenizer:
@@ -191,7 +218,8 @@ class ShakespeareDataset(Dataset):
         self.block_size = block_size
 
         # tokenizer
-        self.tokenizer = BPETokenizer.load("shakespeare_tokenizer.pkl")
+        # self.tokenizer = BPETokenizer.load("shakespeare_tokenizer.pkl")
+        self.tokenizer = UniqueCharTokenizer()
 
         # load in text
         self.data = self._load_text()
@@ -215,8 +243,29 @@ class ShakespeareDataset(Dataset):
         # tokenize  
         return self.tokenizer.tokenize(text_corpus)
 
+    def __len__(self):
+        return len(self.data) // self.block_size
+
     def __getitem__(self, idx):
-        chunk = self.data[idx : idx + self.block_size + 1]
-        x = chunk[:-1]
-        y = chunk[1:]
+        start_idx = idx * self.block_size
+        end_idx = start_idx + self.block_size + 1
+        
+        chunk = self.data[start_idx : end_idx]
+        
+        # Handle the edge case where the last chunk is too short
+        # (This usually only happens if we don't drop_last in DataLoader, 
+        # but good to be safe or just slice strictly).
+        if len(chunk) < self.block_size + 1:
+            # Pad with a random token or 0 if needed, or simply return a shorter slice
+            # Ideally, we just ensure __len__ prevents this.
+            chunk = self.data[-self.block_size-1:]
+
+        x = torch.tensor(chunk[:-1], dtype=torch.long)
+        y = torch.tensor(chunk[1:], dtype=torch.long)
         return x, y
+    
+
+dataset = ShakespeareDataset(
+    block_size=512
+)
+print(max(dataset.data))

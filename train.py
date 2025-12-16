@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from torch.utils.data import random_split
+from torch.optim import AdamW
 import time
 
 class Trainer:

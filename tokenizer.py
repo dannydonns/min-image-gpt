@@ -167,10 +167,33 @@ class BPETokenizer:
         print(f"Tokenizer loaded from {filename}")
         return tokenizer
 
-class PixelTokenizer:
-    # this will ever
-    def __init__():
-        pass
+class UniqueCharTokenizer:
+    # this is the tokenizer which just uses unique characters from the corpus
+    def __init__(self):
+        file_path = 'shakespeare.txt'  # Replace with the actual path to your text file
+        try:
+            with open(file_path, 'r') as file:
+                text_corpus = file.read()
+            print("File content loaded successfully:")
+        except FileNotFoundError:
+            print(f"Error: The file '{file_path}' was not found.")
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            # get the unique characters 
+        
+        unique = list(set(text_corpus))
+
+        # fill the tokenizer
+        self.tokenizer = {unique[i] : i+1  for i in range(len(unique))}
+        print(self.tokenizer)
+        self.detokenizer = {i+1 : unique[i] for i in range(len(unique))}
+
+    def tokenize(self, str):
+        # tokenizes the input string
+        return [self.tokenizer[c] for c in str]
+
+    def detokenize(self, tokens):
+        return "".join([self.detokenizer[tok] for tok in tokens])
 
 # # 1. Create dummy corpus
 # corpus = "hug " * 10 + "pug " * 5 + "pun " * 5 + "bun " * 5
@@ -201,26 +224,38 @@ class PixelTokenizer:
 #         pass
 
 
-file_path = 'shakespeare.txt'  # Replace with the actual path to your text file
+# file_path = 'shakespeare.txt'  # Replace with the actual path to your text file
 
-try:
-    with open(file_path, 'r') as file:
-        text_corpus = file.read()
-    print("File content loaded successfully:")
-    print(text_corpus)
-except FileNotFoundError:
-    print(f"Error: The file '{file_path}' was not found.")
-except Exception as e:
-    print(f"An error occurred: {e}")
+# try:
+#     with open(file_path, 'r') as file:
+#         text_corpus = file.read()
+#     print("File content loaded successfully:")
+# except FileNotFoundError:
+#     print(f"Error: The file '{file_path}' was not found.")
+# except Exception as e:
+#     print(f"An error occurred: {e}")
 
-print(type(text_corpus))
 
-tokenizer = BPETokenizer(vocab_size=1024, max_seq=8)
-tokenizer.bpe(text_corpus)
+tokenizer = UniqueCharTokenizer()
 
-print(tokenizer.tokenize("to be or not to be"))
+# print(type(text_corpus))
 
-tokenizer.save("shakespeare_tokenizer.pkl")
+# tokenizer = BPETokenizer(vocab_size=1024, max_seq=8)
+# tokenizer.bpe(text_corpus)
 
-load_tokenizer = BPETokenizer.load('shakespeare_tokenizer.pkl')
-print(load_tokenizer.tokenize("to be or not to be"))
+tokenized = tokenizer.tokenize("to be or not to be")
+print(tokenized)
+detokenized = tokenizer.detokenize(tokenized)
+print(detokenized)
+tokenized = tokenizer.tokenize("to be or not to be")
+print(tokenized)
+detokenized = tokenizer.detokenize(tokenized)
+print(detokenized)
+tokenized = tokenizer.tokenize("to be or not to be")
+print(tokenized)
+detokenized = tokenizer.detokenize(tokenized)
+print(detokenized)
+
+# tokenizer.save("shakespeare_tokenizer.pkl")
+
+# load_tokenizer = BPETokenizer.load('shakespeare_tokenizer.pkl')
